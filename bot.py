@@ -5,18 +5,10 @@ import requests
 from flask import Flask
 from openai import OpenAI
 
-# =========================
-# НАСТРОЙКИ
-# =========================
-
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 HF_TOKEN = os.environ["HF_TOKEN"]
 
 API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
-
-# =========================
-# НЕЙРОСЕТЬ
-# =========================
 
 client = OpenAI(
     base_url="https://router.huggingface.co/v1",
@@ -25,34 +17,37 @@ client = OpenAI(
 
 MODEL = "openai/gpt-oss-120b:fastest"
 
-# =========================
-# WEB-СЕРВЕР ДЛЯ RENDER
-# =========================
-
 app = Flask(__name__)
 
 @app.route("/")
 def home():
     return "🤖 Telegram AI Bot работает!"
 
-# =========================
-# TELEGRAM-БОТ
-# =========================
-
 def telegram_bot():
+
+    print("🤖 TELEGRAM BOT STARTED")
+
+    # Удаляем webhook, чтобы getUpdates точно работал
+    try:
+        r = requests.post(
+            f"{API}/deleteWebhook",
+            json={"drop_pending_updates": False},
+            timeout=20
+        )
+        print("Webhook:", r.json())
+    except Exception as e:
+        print("Webhook error:", e)
 
     offset = 0
 
-    print("🤖 Telegram бот запущен!")
-
     while True:
         try:
-
             response = requests.get(
                 f"{API}/getUpdates",
                 params={
                     "offset": offset,
-                    "timeout": 30
+                    "timeout": 30,
+                    "allowed_updates": ["message"]
                 },
                 timeout=35
             )
@@ -60,7 +55,7 @@ def telegram_bot():
             data = response.json()
 
             if not data.get("ok"):
-                print("Ошибка Telegram:", data)
+                print("TELEGRAM ERROR:", data)
                 time.sleep(5)
                 continue
 
@@ -68,33 +63,32 @@ def telegram_bot():
 
                 offset = update["update_id"] + 1
 
+                print("📩 UPDATE:", update)
+
                 message = update.get("message")
 
                 if not message:
                     continue
 
                 text = message.get("text", "")
+                chat_id = message["chat"]["id"]
 
-                # Отвечаем только на /ai
+                print("💬 MESSAGE:", text)
+
                 if not text.startswith("/ai"):
                     continue
 
                 question = text[3:].strip()
 
-                chat_id = message["chat"]["id"]
-
                 if not question:
-
                     answer = "Напиши вопрос после /ai 🙂"
 
                 else:
-
                     try:
+                        print("🧠 Отправляю вопрос в нейросеть...")
 
                         result = client.chat.completions.create(
-
                             model=MODEL,
-
                             messages=[
                                 {
                                     "role": "system",
@@ -109,20 +103,18 @@ def telegram_bot():
                                     "content": question
                                 }
                             ],
-
                             max_tokens=500
                         )
 
                         answer = result.choices[0].message.content
 
+                        print("✅ Ответ получен")
+
                     except Exception as e:
+                        print("❌ AI ERROR:", repr(e))
+                        answer = "⚠️ Ошибка нейросети."
 
-                        print("Ошибка нейросети:", e)
-
-                        answer = "⚠️ Нейросеть временно недоступна."
-
-                # Отправляем ответ в Telegram
-                requests.post(
+                result = requests.post(
                     f"{API}/sendMessage",
                     json={
                         "chat_id": chat_id,
@@ -131,20 +123,15 @@ def telegram_bot():
                     timeout=20
                 )
 
+                print("📤 TELEGRAM RESPONSE:", result.text)
+
         except Exception as e:
-
-            print("Ошибка бота:", e)
-
+            print("❌ BOT ERROR:", repr(e))
             time.sleep(5)
 
 
-# =========================
-# ЗАПУСК
-# =========================
-
 if __name__ == "__main__":
 
-    # Запускаем Telegram-бота отдельно
     bot_thread = threading.Thread(
         target=telegram_bot,
         daemon=True
@@ -152,10 +139,9 @@ if __name__ == "__main__":
 
     bot_thread.start()
 
-    # Render требует открытый порт
     port = int(os.environ.get("PORT", 10000))
 
     app.run(
         host="0.0.0.0",
         port=port
-                                    )
+                        )
