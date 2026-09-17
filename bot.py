@@ -1,14 +1,21 @@
 import os
 import time
-import threading
 import requests
 from flask import Flask
 from openai import OpenAI
+
+# =========================
+# НАСТРОЙКИ
+# =========================
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 HF_TOKEN = os.environ["HF_TOKEN"]
 
 API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+
+# =========================
+# НЕЙРОСЕТЬ
+# =========================
 
 client = OpenAI(
     base_url="https://router.huggingface.co/v1",
@@ -17,53 +24,61 @@ client = OpenAI(
 
 MODEL = "openai/gpt-oss-120b:fastest"
 
+# =========================
+# RENDER
+# =========================
+
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "🤖 Telegram AI Bot работает!"
+    return "Telegram AI Bot работает!"
 
-def telegram_bot():
+# =========================
+# TELEGRAM
+# =========================
 
-    print("🤖 TELEGRAM BOT STARTED")
+def run_bot():
 
-    # Удаляем webhook, чтобы getUpdates точно работал
+    print("BOT STARTED")
+
+    # Удаляем webhook
     try:
         r = requests.post(
             f"{API}/deleteWebhook",
-            json={"drop_pending_updates": False},
             timeout=20
         )
-        print("Webhook:", r.json())
+        print("WEBHOOK:", r.text)
     except Exception as e:
-        print("Webhook error:", e)
+        print("WEBHOOK ERROR:", e)
 
     offset = 0
 
     while True:
+
         try:
-            response = requests.get(
+
+            r = requests.get(
                 f"{API}/getUpdates",
                 params={
                     "offset": offset,
-                    "timeout": 30,
-                    "allowed_updates": ["message"]
+                    "timeout": 25
                 },
                 timeout=35
             )
 
-            data = response.json()
+            data = r.json()
+
+            print("TELEGRAM:", data.get("ok"))
 
             if not data.get("ok"):
-                print("TELEGRAM ERROR:", data)
+                print(data)
                 time.sleep(5)
                 continue
 
-            for update in data.get("result", []):
+            for update in data["result"]:
 
                 offset = update["update_id"] + 1
-
-                print("📩 UPDATE:", update)
 
                 message = update.get("message")
 
@@ -73,7 +88,7 @@ def telegram_bot():
                 text = message.get("text", "")
                 chat_id = message["chat"]["id"]
 
-                print("💬 MESSAGE:", text)
+                print("MESSAGE:", text)
 
                 if not text.startswith("/ai"):
                     continue
@@ -84,8 +99,10 @@ def telegram_bot():
                     answer = "Напиши вопрос после /ai 🙂"
 
                 else:
+
                     try:
-                        print("🧠 Отправляю вопрос в нейросеть...")
+
+                        print("ASK AI:", question)
 
                         result = client.chat.completions.create(
                             model=MODEL,
@@ -93,9 +110,9 @@ def telegram_bot():
                                 {
                                     "role": "system",
                                     "content": (
-                                        "Ты дружелюбный помощник в Telegram. "
-                                        "Отвечай на русском языке. "
-                                        "Отвечай понятно и по существу."
+                                        "Ты дружелюбный помощник "
+                                        "в Telegram. Отвечай "
+                                        "на русском языке."
                                     )
                                 },
                                 {
@@ -108,13 +125,15 @@ def telegram_bot():
 
                         answer = result.choices[0].message.content
 
-                        print("✅ Ответ получен")
+                        print("AI ANSWER OK")
 
                     except Exception as e:
-                        print("❌ AI ERROR:", repr(e))
+
+                        print("AI ERROR:", repr(e))
+
                         answer = "⚠️ Ошибка нейросети."
 
-                result = requests.post(
+                send = requests.post(
                     f"{API}/sendMessage",
                     json={
                         "chat_id": chat_id,
@@ -123,22 +142,32 @@ def telegram_bot():
                     timeout=20
                 )
 
-                print("📤 TELEGRAM RESPONSE:", result.text)
+                print("SEND:", send.text)
 
         except Exception as e:
-            print("❌ BOT ERROR:", repr(e))
+
+            print("BOT ERROR:", repr(e))
+
             time.sleep(5)
 
 
+# =========================
+# ЗАПУСК
+# =========================
+
 if __name__ == "__main__":
 
-    bot_thread = threading.Thread(
-        target=telegram_bot,
+    import threading
+
+    thread = threading.Thread(
+        target=run_bot,
         daemon=True
     )
 
-    bot_thread.start()
-    print("🔥 ПОТОК TELEGRAM ЗАПУЩЕН")
+    thread.start()
+
+    print("TELEGRAM THREAD STARTED")
+
     port = int(os.environ.get("PORT", 10000))
 
     app.run(
