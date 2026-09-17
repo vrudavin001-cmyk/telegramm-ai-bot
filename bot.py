@@ -1,21 +1,12 @@
 import os
-import time
 import requests
-from flask import Flask
+from flask import Flask, request
 from openai import OpenAI
-
-# =========================
-# НАСТРОЙКИ
-# =========================
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 HF_TOKEN = os.environ["HF_TOKEN"]
 
 API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
-
-# =========================
-# НЕЙРОСЕТЬ
-# =========================
 
 client = OpenAI(
     base_url="https://router.huggingface.co/v1",
@@ -24,153 +15,100 @@ client = OpenAI(
 
 MODEL = "openai/gpt-oss-120b:fastest"
 
-# =========================
-# RENDER
-# =========================
-
 app = Flask(__name__)
+
+
+def send_message(chat_id, text):
+    requests.post(
+        f"{API}/sendMessage",
+        json={
+            "chat_id": chat_id,
+            "text": text
+        },
+        timeout=30
+    )
+
 
 @app.route("/")
 def home():
-    return "Telegram AI Bot работает!"
+    return "🤖 Telegram AI Bot работает!"
 
-# =========================
-# TELEGRAM
-# =========================
 
-def run_bot():
+@app.route("/telegram", methods=["POST"])
+def telegram():
 
-    print("BOT STARTED")
+    update = request.get_json(silent=True)
 
-    # Удаляем webhook
-    try:
-        r = requests.post(
-            f"{API}/deleteWebhook",
-            timeout=20
+    if not update:
+        return "OK"
+
+    message = update.get("message")
+
+    if not message:
+        return "OK"
+
+    text = message.get("text", "")
+    chat_id = message["chat"]["id"]
+
+    print("📩 Получено:", text)
+
+    # Команды
+    if text.startswith("/start"):
+        send_message(
+            chat_id,
+            "Привет! 🤖 Я AI-бот. Просто напиши мне сообщение."
         )
-        print("WEBHOOK:", r.text)
-    except Exception as e:
-        print("WEBHOOK ERROR:", e)
+        return "OK"
 
-    offset = 0
+    # Обычные сообщения
+    if not text:
+        return "OK"
 
-    while True:
+    try:
 
-        try:
+        print("🧠 Отправляю в нейросеть...")
 
-            r = requests.get(
-                f"{API}/getUpdates",
-                params={
-                    "offset": offset,
-                    "timeout": 25
+        result = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Ты дружелюбный AI-помощник в Telegram. "
+                        "Отвечай на русском языке, понятно и по существу."
+                    )
                 },
-                timeout=35
-            )
+                {
+                    "role": "user",
+                    "content": text
+                }
+            ],
+            max_tokens=500
+        )
 
-            data = r.json()
+        answer = result.choices[0].message.content
 
-            print("TELEGRAM:", data.get("ok"))
+        print("✅ Ответ:", answer)
 
-            if not data.get("ok"):
-                print(data)
-                time.sleep(5)
-                continue
+        send_message(chat_id, answer)
 
-            for update in data["result"]:
+    except Exception as e:
 
-                offset = update["update_id"] + 1
+        print("❌ Ошибка AI:", repr(e))
 
-                message = update.get("message")
+        send_message(
+            chat_id,
+            "⚠️ Нейросеть временно недоступна."
+        )
 
-                if not message:
-                    continue
+    return "OK"
 
-                text = message.get("text", "")
-                chat_id = message["chat"]["id"]
-
-                print("MESSAGE:", text)
-
-                if not text.startswith("/ai"):
-                    continue
-
-                question = text[3:].strip()
-
-                if not question:
-                    answer = "Напиши вопрос после /ai 🙂"
-
-                else:
-
-                    try:
-
-                        print("ASK AI:", question)
-
-                        result = client.chat.completions.create(
-                            model=MODEL,
-                            messages=[
-                                {
-                                    "role": "system",
-                                    "content": (
-                                        "Ты дружелюбный помощник "
-                                        "в Telegram. Отвечай "
-                                        "на русском языке."
-                                    )
-                                },
-                                {
-                                    "role": "user",
-                                    "content": question
-                                }
-                            ],
-                            max_tokens=500
-                        )
-
-                        answer = result.choices[0].message.content
-
-                        print("AI ANSWER OK")
-
-                    except Exception as e:
-
-                        print("AI ERROR:", repr(e))
-
-                        answer = "⚠️ Ошибка нейросети."
-
-                send = requests.post(
-                    f"{API}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": answer
-                    },
-                    timeout=20
-                )
-
-                print("SEND:", send.text)
-
-        except Exception as e:
-
-            print("BOT ERROR:", repr(e))
-
-            time.sleep(5)
-
-
-# =========================
-# ЗАПУСК
-# =========================
 
 if __name__ == "__main__":
-
-    import threading
-
-    thread = threading.Thread(
-        target=run_bot,
-        daemon=True
-    )
-
-    thread.start()
-
-    print("TELEGRAM THREAD STARTED")
 
     port = int(os.environ.get("PORT", 10000))
 
     app.run(
         host="0.0.0.0",
         port=port
-                        )
+    )
