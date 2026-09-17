@@ -138,7 +138,7 @@ if __name__ == "__main__":
     )
 
     bot_thread.start()
-
+    print("🔥 ПОТОК TELEGRAM ЗАПУЩЕН")
     port = int(os.environ.get("PORT", 10000))
 
     app.run(
