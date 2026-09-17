@@ -100,11 +100,23 @@ def telegram():
             and reply["from"].get("username") == bot_username
         )
 
-        # 2. Проверяем упоминание @hren_67_bot
-        mentioned = f"@{bot_username}" in text.lower()
+        # 2. Проверяем упоминание бота
+mentioned = False
 
-        # Если ни упоминания, ни ответа на бота — молчим
-        if not mentioned and not replied_to_bot:
+for entity in message.get("entities", []):
+    if entity.get("type") == "mention":
+        offset = entity["offset"]
+        length = entity["length"]
+
+        mention = text[offset:offset + length]
+
+        if mention.lower() == f"@{bot_username}".lower():
+            mentioned = True
+            break
+
+# Если ни упоминания, ни ответа на бота — молчим
+if not mentioned and not replied_to_bot:
+    return "OK"
             return "OK"
 
         # Убираем @hren_67_bot из вопроса
@@ -137,9 +149,9 @@ def telegram():
                 {
                     "role": "system",
                     "content": (
-                        "Ты грубый AI-помошник. "
+                        "Ты дружелюбный AI-помощник в Telegram. "
                         "Отвечай на русском языке. "
-                        "Отвечай понятно и с ненормативной лексикой."
+                        "Отвечай понятно и по существу."
                     )
                 },
                 {
