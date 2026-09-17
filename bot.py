@@ -100,23 +100,11 @@ def telegram():
             and reply["from"].get("username") == bot_username
         )
 
-        # 2. Проверяем упоминание бота
-mentioned = False
+        # 2. Проверяем упоминание @hren_67_bot
+        mentioned = f"@{bot_username}" in text.lower()
 
-for entity in message.get("entities", []):
-    if entity.get("type") == "mention":
-        offset = entity["offset"]
-        length = entity["length"]
-
-        mention = text[offset:offset + length]
-
-        if mention.lower() == f"@{bot_username}".lower():
-            mentioned = True
-            break
-
-# Если ни упоминания, ни ответа на бота — молчим
-if not mentioned and not replied_to_bot:
-    return "OK"
+        # Если ни упоминания, ни ответа на бота — молчим
+        if not mentioned and not replied_to_bot:
             return "OK"
 
         # Убираем @hren_67_bot из вопроса
