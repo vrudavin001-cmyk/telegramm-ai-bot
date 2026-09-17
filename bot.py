@@ -17,8 +17,53 @@ MODEL = "openai/gpt-oss-120b:fastest"
 
 app = Flask(__name__)
 
+# Стиль по умолчанию
+chat_styles = {}
+
+STYLES = {
+
+    "normal": """
+Общайся естественно и дружелюбно.
+Пиши на русском языке.
+Отвечай понятно и по существу.
+Не будь слишком официальным.
+""",
+
+    "friend": """
+Общайся как близкий приятель в Telegram.
+Пиши естественно, свободно и непринуждённо.
+Можно использовать разговорные выражения и лёгкий сленг.
+Иногда шути и поддерживай собеседника.
+Не будь занудным или слишком официальным.
+""",
+
+    "troll": """
+Общайся весело и с юмором.
+Можно слегка подкалывать собеседника и использовать иронию.
+Не переходи в настоящие оскорбления или травлю.
+Даже серьёзные вопросы объясняй понятно.
+Пиши как весёлый участник компании.
+""",
+
+    "serious": """
+Общайся спокойно, серьёзно и уверенно.
+Отвечай чётко и без лишних шуток.
+Если вопрос сложный — объясняй по пунктам.
+Не используй лишний сленг.
+""",
+
+    "expert": """
+Общайся как компетентный специалист.
+Давай точные и хорошо структурированные ответы.
+Объясняй сложные вещи простым языком.
+При необходимости используй списки и примеры.
+Не добавляй лишнюю информацию, которая не помогает ответить на вопрос.
+"""
+}
+
 
 def send_message(chat_id, text, reply_to=None):
+
     data = {
         "chat_id": chat_id,
         "text": text
@@ -29,11 +74,14 @@ def send_message(chat_id, text, reply_to=None):
             "message_id": reply_to
         }
 
-    requests.post(
-        f"{API}/sendMessage",
-        json=data,
-        timeout=30
-    )
+    try:
+        requests.post(
+            f"{API}/sendMessage",
+            json=data,
+            timeout=30
+        )
+    except Exception as e:
+        print("SEND ERROR:", repr(e))
 
 
 @app.route("/")
@@ -56,6 +104,7 @@ def telegram():
 
     text = message.get("text", "")
     chat = message.get("chat", {})
+
     chat_id = chat.get("id")
     chat_type = chat.get("type")
     message_id = message.get("message_id")
@@ -64,33 +113,101 @@ def telegram():
         return "OK"
 
     print("📩 Получено:", text)
-    print("💬 Тип чата:", chat_type)
 
-    # =========================
-    # ЛИЧНЫЙ ЧАТ
-    # =========================
+    # ==================================================
+    # КОМАНДА /START
+    # ==================================================
 
-    if chat_type == "private":
+    if text.startswith("/start"):
 
-        if text.startswith("/start"):
+        send_message(
+            chat_id,
+            "🤖 Привет!\n\n"
+            "Просто напиши мне сообщение.\n\n"
+            "Доступные стили:\n"
+            "/style normal\n"
+            "/style friend\n"
+            "/style troll\n"
+            "/style serious\n"
+            "/style expert"
+        )
+
+        return "OK"
+
+    # ==================================================
+    # ПЕРЕКЛЮЧЕНИЕ СТИЛЯ
+    # ==================================================
+
+    if text.lower().startswith("/style"):
+
+        parts = text.split()
+
+        if len(parts) < 2:
+
             send_message(
                 chat_id,
-                "Привет! 🤖 Просто напиши мне сообщение."
+                "Выбери стиль:\n\n"
+                "normal — обычный\n"
+                "friend — приятель\n"
+                "troll — юмор и подколы\n"
+                "serious — серьёзный\n"
+                "expert — профессиональный"
             )
+
             return "OK"
+
+        style = parts[1].lower()
+
+        if style not in STYLES:
+
+            send_message(
+                chat_id,
+                "❌ Такого стиля нет.\n\n"
+                "Доступно: normal, friend, troll, serious, expert"
+            )
+
+            return "OK"
+
+        chat_styles[chat_id] = style
+
+        send_message(
+            chat_id,
+            f"✅ Стиль изменён на: {style}"
+        )
+
+        return "OK"
+
+    # ==================================================
+    # ОПРЕДЕЛЯЕМ, НУЖНО ЛИ ОТВЕЧАТЬ
+    # ==================================================
+
+    # Личная переписка — отвечаем на всё
+    if chat_type == "private":
 
         question = text
 
-    # =========================
-    # ГРУППА
-    # =========================
-
+    # Группа — только упоминание или ответ боту
     elif chat_type in ["group", "supergroup"]:
 
-        # Имя бота
         bot_username = "hren_67_bot"
 
-        # 1. Проверяем, ответил ли пользователь на сообщение бота
+        mentioned = False
+
+        # Проверяем официальное Telegram-упоминание
+        for entity in message.get("entities", []):
+
+            if entity.get("type") == "mention":
+
+                offset = entity["offset"]
+                length = entity["length"]
+
+                mention = text[offset:offset + length]
+
+                if mention.lower() == f"@{bot_username}".lower():
+                    mentioned = True
+                    break
+
+        # Проверяем ответ на сообщение бота
         reply = message.get("reply_to_message")
 
         replied_to_bot = (
@@ -100,46 +217,56 @@ def telegram():
             and reply["from"].get("username") == bot_username
         )
 
-        # 2. Проверяем упоминание @hren_67_bot
-        mentioned = f"@{bot_username}" in text.lower()
-
-        # Если ни упоминания, ни ответа на бота — молчим
         if not mentioned and not replied_to_bot:
             return "OK"
 
-        # Убираем @hren_67_bot из вопроса
-        question = text.replace(
+        # Убираем упоминание
+        question = text
+
+        question = question.replace(
             f"@{bot_username}",
             ""
         ).strip()
 
         if not question:
+
             send_message(
                 chat_id,
-                "Да? 🙂 Напиши свой вопрос."
+                "Да? 🙂 Напиши вопрос."
             )
+
             return "OK"
 
     else:
         return "OK"
 
-    # =========================
+    # ==================================================
+    # ВЫБИРАЕМ СТИЛЬ
+    # ==================================================
+
+    style = chat_styles.get(chat_id, "normal")
+
+    style_instruction = STYLES[style]
+
+    # ==================================================
     # НЕЙРОСЕТЬ
-    # =========================
+    # ==================================================
 
     try:
 
-        print("🧠 Отправляю в нейросеть:", question)
+        print("🧠 Стиль:", style)
+        print("🧠 Вопрос:", question)
 
         result = client.chat.completions.create(
+
             model=MODEL,
+
             messages=[
                 {
                     "role": "system",
                     "content": (
-                        "Ты дружелюбный AI-помощник в Telegram. "
-                        "Отвечай на русском языке. "
-                        "Отвечай понятно и по существу."
+                        "Ты AI-помощник в Telegram.\n\n"
+                        + style_instruction
                     )
                 },
                 {
@@ -147,6 +274,7 @@ def telegram():
                     "content": question
                 }
             ],
+
             max_tokens=500
         )
 
@@ -154,14 +282,16 @@ def telegram():
 
         print("✅ Ответ получен")
 
-        # В группе отвечаем прямо на сообщение пользователя
         if chat_type in ["group", "supergroup"]:
+
             send_message(
                 chat_id,
                 answer,
                 reply_to=message_id
             )
+
         else:
+
             send_message(
                 chat_id,
                 answer
@@ -169,7 +299,7 @@ def telegram():
 
     except Exception as e:
 
-        print("❌ Ошибка AI:", repr(e))
+        print("❌ AI ERROR:", repr(e))
 
         send_message(
             chat_id,
