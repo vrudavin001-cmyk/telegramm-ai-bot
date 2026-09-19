@@ -1,5 +1,7 @@
 import os
+import random
 import requests
+from collections import defaultdict, deque
 from flask import Flask, request
 from openai import OpenAI
 
@@ -13,11 +15,10 @@ TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 HF_TOKEN = os.environ["HF_TOKEN"]
 
 BOT_USERNAME = "hren_67_bot"
-
 MODEL = "openai/gpt-oss-120b:fastest"
 
 # =========================
-# HUGGING FACE
+# AI
 # =========================
 
 client = OpenAI(
@@ -30,13 +31,11 @@ client = OpenAI(
 # =========================
 
 STYLES = {
-    "normal": (
-        "Отвечай нормально, понятно и естественно."
-    ),
+    "normal": "Отвечай нормально, понятно и естественно.",
 
     "friend": (
-        "Общайся как близкий друг: тепло, неформально, "
-        "просто и с юмором."
+        "Общайся как близкий друг: тепло, неформально "
+        "и с юмором."
     ),
 
     "troll": (
@@ -45,17 +44,10 @@ STYLES = {
     ),
 
     "rude": (
-        "Общайся максимально дерзко, грубо и нахально. "
-        "Используй разговорный русский, мат, сарказм, "
-        "жёсткие подколы и оскорбительные шутки в адрес "
-        "собеседника, если это соответствует контексту. "
-        "Не будь излишне вежливым. "
-        "Не угрожай человеку и не призывай к насилию. "
-        "Не оскорбляй людей по расе, национальности, "
-        "религии, инвалидности, полу, сексуальной ориентации "
-        "или другим защищённым признакам. "
-        "Не превращай каждый ответ в бессмысленный мат — "
-        "отвечай по существу."
+        "Общайся грубо, дерзко и нахально. "
+        "Используй разговорный русский, мат, сарказм "
+        "и жёсткие подколы. Не угрожай человеку и "
+        "не атакуй людей по защищённым признакам."
     ),
 
     "serious": (
@@ -63,17 +55,25 @@ STYLES = {
     ),
 
     "expert": (
-        "Отвечай как эксперт: подробно, логично, "
-        "точно и структурированно."
+        "Отвечай как эксперт: подробно, логично и точно."
+    ),
+
+    "sigma": (
+        "Общайся уверенно, дерзко и с мемным "
+        "сигма-вайбом. Используй современный сленг "
+        "и юмор, но отвечай по существу."
     )
 }
 
-# Текущий стиль каждого чата
+# Стиль каждого чата
 chat_styles = {}
+
+# Память последних 10 сообщений каждого чата
+memory = defaultdict(lambda: deque(maxlen=10))
 
 
 # =========================
-# ОТПРАВКА СООБЩЕНИЯ
+# TELEGRAM
 # =========================
 
 def send_message(chat_id, text, reply_to=None):
@@ -88,7 +88,6 @@ def send_message(chat_id, text, reply_to=None):
         "text": text
     }
 
-    # В группе отвечаем именно на сообщение пользователя
     if reply_to:
         data["reply_parameters"] = {
             "message_id": reply_to
@@ -108,14 +107,11 @@ def send_message(chat_id, text, reply_to=None):
         )
 
     except Exception as e:
-        print(
-            "SEND ERROR:",
-            repr(e)
-        )
+        print("SEND ERROR:", repr(e))
 
 
 # =========================
-# ЗАПРОС К НЕЙРОСЕТИ
+# AI
 # =========================
 
 def ask_ai(chat_id, question):
@@ -130,30 +126,47 @@ def ask_ai(chat_id, question):
         STYLES["normal"]
     )
 
+    # Добавляем сообщение пользователя в память
+    memory[chat_id].append({
+        "role": "user",
+        "content": question
+    })
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                style +
+                "\nТы Telegram-бот. "
+                "Отвечай на русском языке, если пользователь "
+                "не попросил другой язык."
+            )
+        }
+    ]
+
+    # Добавляем историю
+    messages.extend(
+        list(memory[chat_id])
+    )
+
     try:
 
         response = client.chat.completions.create(
-
             model=MODEL,
-
-            messages=[
-                {
-                    "role": "system",
-                    "content": style
-                },
-                {
-                    "role": "user",
-                    "content": question
-                }
-            ],
-
+            messages=messages,
             max_tokens=500
         )
 
         answer = response.choices[0].message.content
 
         if not answer:
-            return "Что-то нейросеть ничего не ответила 😐"
+            answer = "Я что-то завис 😐"
+
+        # Сохраняем ответ
+        memory[chat_id].append({
+            "role": "assistant",
+            "content": answer
+        })
 
         return answer
 
@@ -165,23 +178,22 @@ def ask_ai(chat_id, question):
         )
 
         return (
-            "Блин, нейросеть сейчас что-то заглючила 😕 "
+            "Нейросеть сейчас заглючила 😕 "
             "Попробуй ещё раз."
         )
 
 
 # =========================
-# ГЛАВНАЯ СТРАНИЦА
+# ГЛАВНАЯ
 # =========================
 
 @app.route("/")
 def home():
-
     return "BOT IS ALIVE"
 
 
 # =========================
-# TELEGRAM WEBHOOK
+# WEBHOOK
 # =========================
 
 @app.route(
@@ -208,7 +220,6 @@ def telegram():
         )
 
         chat_id = chat.get("id")
-
         chat_type = chat.get("type")
 
         text = message.get(
@@ -219,59 +230,218 @@ def telegram():
         if not text:
             return "OK"
 
-        print(
-            "📩 Получено:",
-            text
-        )
+        print("📩 Получено:", text)
 
         # =========================
-        # КОМАНДА /STYLE
+        # /STYLE
         # =========================
 
         if text.startswith("/style"):
 
             parts = text.split()
 
-            # Если написали просто /style
             if len(parts) == 1:
 
                 send_message(
                     chat_id,
-                    "🎭 Доступные стили:\n\n"
+                    "🎭 Стили:\n\n"
                     "/style normal — обычный\n"
-                    "/style friend — как друг\n"
+                    "/style friend — друг\n"
                     "/style troll — тролль\n"
                     "/style rude — грубый 😈\n"
                     "/style serious — серьёзный\n"
-                    "/style expert — эксперт"
+                    "/style expert — эксперт\n"
+                    "/style sigma — сигма 😎"
                 )
 
                 return "OK"
 
-            style_name = parts[1].lower()
+            style = parts[1].lower()
 
-            # Проверяем существование стиля
-            if style_name in STYLES:
+            if style in STYLES:
 
-                chat_styles[chat_id] = style_name
+                chat_styles[chat_id] = style
 
                 send_message(
                     chat_id,
-                    f"😈 Стиль изменён на: {style_name}"
+                    f"🎭 Стиль установлен: {style}"
                 )
 
             else:
 
                 send_message(
                     chat_id,
-                    "❌ Такого стиля нет.\n\n"
-                    "Используй /style чтобы посмотреть список."
+                    "❌ Такого стиля нет. "
+                    "Напиши /style"
                 )
 
             return "OK"
 
         # =========================
-        # ЛИЧНЫЕ СООБЩЕНИЯ
+        # /COIN
+        # =========================
+
+        if text.startswith("/coin"):
+
+            result = random.choice([
+                "🪙 Орёл!",
+                "🪙 Решка!"
+            ])
+
+            send_message(
+                chat_id,
+                result
+            )
+
+            return "OK"
+
+        # =========================
+        # /DICE
+        # =========================
+
+        if text.startswith("/dice"):
+
+            number = random.randint(
+                1,
+                6
+            )
+
+            send_message(
+                chat_id,
+                f"🎲 Выпало: {number}"
+            )
+
+            return "OK"
+
+        # =========================
+        # /GUESS
+        # =========================
+
+        if text.startswith("/guess"):
+
+            number = random.randint(
+                1,
+                10
+            )
+
+            send_message(
+                chat_id,
+                "🔢 Я загадал число от 1 до 10.\n"
+                "Попробуй угадать его!"
+            )
+
+            # Запоминаем число
+            memory[chat_id].append({
+                "role": "system",
+                "content": (
+                    f"В игре угадай число загадано число "
+                    f"{number}. Пользователь должен угадать."
+                )
+            })
+
+            return "OK"
+
+        # =========================
+        # /JOKE
+        # =========================
+
+        if text.startswith("/joke"):
+
+            answer = ask_ai(
+                chat_id,
+                "Придумай короткую смешную шутку."
+            )
+
+            send_message(
+                chat_id,
+                answer
+            )
+
+            return "OK"
+
+        # =========================
+        # /FACT
+        # =========================
+
+        if text.startswith("/fact"):
+
+            answer = ask_ai(
+                chat_id,
+                "Расскажи один интересный и правдивый "
+                "факт. Коротко."
+            )
+
+            send_message(
+                chat_id,
+                answer
+            )
+
+            return "OK"
+
+        # =========================
+        # /ROAST
+        # =========================
+
+        if text.startswith("/roast"):
+
+            target = text[
+                len("/roast"):
+            ].strip()
+
+            if not target:
+
+                target = "меня"
+
+            answer = ask_ai(
+                chat_id,
+                (
+                    f"Сделай короткий шуточный roast "
+                    f"для {target}. "
+                    f"Это должна быть шутка, без угроз "
+                    f"и атак на защищённые признаки."
+                )
+            )
+
+            send_message(
+                chat_id,
+                answer
+            )
+
+            return "OK"
+
+        # =========================
+        # /ASK
+        # =========================
+
+        if text.startswith("/ask"):
+
+            question = text[
+                len("/ask"):
+            ].strip()
+
+            if not question:
+
+                send_message(
+                    chat_id,
+                    "Напиши вопрос после /ask"
+                )
+
+                return "OK"
+
+            answer = ask_ai(
+                chat_id,
+                question
+            )
+
+            send_message(
+                chat_id,
+                answer
+            )
+
+            return "OK"
+
+        # =========================
+        # ЛИЧКА
         # =========================
 
         if chat_type == "private":
@@ -299,7 +469,7 @@ def telegram():
 
             mentioned = False
 
-            # Проверяем @hren_67_bot
+            # Проверяем упоминание
             for entity in message.get(
                 "entities",
                 []
@@ -331,13 +501,9 @@ def telegram():
                     ):
 
                         mentioned = True
-
                         break
 
-            # =========================
-            # ПРОВЕРКА ОТВЕТА БОТУ
-            # =========================
-
+            # Проверяем ответ боту
             reply = message.get(
                 "reply_to_message"
             )
@@ -363,42 +529,29 @@ def telegram():
 
                     replied_to_bot = True
 
-            # Если бота не упомянули
-            # и не ответили ему — ничего не делаем
-            if not mentioned and not replied_to_bot:
+            # Не обращались к боту
+            if (
+                not mentioned
+                and
+                not replied_to_bot
+            ):
 
                 return "OK"
 
-            # =========================
-            # УБИРАЕМ УПОМИНАНИЕ
-            # =========================
-
-            question = text
-
-            question = question.replace(
+            # Убираем @username
+            question = text.replace(
                 f"@{BOT_USERNAME}",
                 ""
-            )
+            ).strip()
 
-            question = question.strip()
-
-            # Если написали только @бот
             if not question:
 
                 question = "Привет!"
-
-            # =========================
-            # ОТПРАВЛЯЕМ В НЕЙРОСЕТЬ
-            # =========================
 
             answer = ask_ai(
                 chat_id,
                 question
             )
-
-            # =========================
-            # ОТВЕЧАЕМ В ГРУППЕ
-            # =========================
 
             send_message(
                 chat_id,
