@@ -1,3 +1,5 @@
-openai
-requests
 flask
+requests
+openai
+huggingface_hub
+Pillow
